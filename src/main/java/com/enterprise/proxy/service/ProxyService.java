@@ -20,6 +20,7 @@ import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.impl.client.ProxyAuthenticationStrategy;
+import org.apache.http.impl.client.WinHttpClients;
 import org.apache.http.util.EntityUtils;
 import org.apache.http.config.Registry;
 import org.apache.http.config.RegistryBuilder;
@@ -358,7 +359,16 @@ public class ProxyService {
                 .register(AuthSchemes.BASIC, new BasicSchemeFactory())
                 .build();
         
-        return HttpClientBuilder.create()
+        HttpClientBuilder builder;
+        if (WinHttpClients.isWinAuthAvailable()) {
+            logger.info("Using Windows native SSPI for NTLM (WinHttpClients)");
+            builder = WinHttpClients.custom();
+        } else {
+            logger.info("Windows SSPI not available, using standard HttpClient");
+            builder = HttpClientBuilder.create();
+        }
+        
+        return builder
                 .setDefaultAuthSchemeRegistry(authRegistry)
                 .setDefaultCredentialsProvider(credentialsProvider)
                 .setDefaultRequestConfig(config)
