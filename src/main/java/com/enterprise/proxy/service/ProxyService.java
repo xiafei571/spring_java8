@@ -145,24 +145,31 @@ public class ProxyService {
         // Set up proxy host - exactly like your 403 project
         HttpHost proxy = new HttpHost(proxyHost, proxyPort);
         
-        // Set up NTLM credentials - exactly like your 403 project
+        // NTLM credentials only - but try different AuthScope configurations
         CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
+        
         NTCredentials ntCredentials = new NTCredentials(
                 actualUsername, 
                 password, 
                 workstation, 
                 actualDomain != null ? actualDomain : ""
         );
-        credentialsProvider.setCredentials(new AuthScope(proxyHost, proxyPort), ntCredentials);
         
-        logger.info("NTLM Credentials created - Domain: [{}], Username: [{}], Workstation: [{}]", 
+        // Add NTLM credentials with multiple AuthScope configurations
+        credentialsProvider.setCredentials(new AuthScope(proxyHost, proxyPort), ntCredentials);
+        credentialsProvider.setCredentials(new AuthScope(AuthScope.ANY_HOST, AuthScope.ANY_PORT), ntCredentials);
+        credentialsProvider.setCredentials(AuthScope.ANY, ntCredentials);
+        
+        logger.info("NTLM Credentials added with multiple scopes - Domain: [{}], Username: [{}], Workstation: [{}]", 
                    actualDomain, actualUsername, workstation);
         
-        // Configure request with proxy - exactly like your 403 project
+        // Configure request with proxy - force NTLM preference
         RequestConfig config = RequestConfig.custom()
                 .setProxy(proxy)
                 .setConnectTimeout(30000)
                 .setSocketTimeout(30000)
+                .setProxyPreferredAuthSchemes(java.util.Arrays.asList("NTLM"))
+                .setAuthenticationEnabled(true)
                 .build();
         
         // Create HttpClient with NTLM support - exactly like your 403 project
