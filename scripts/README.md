@@ -6,7 +6,6 @@ This PowerShell script provides the same functionality as the Java application b
 
 - `proxy-client.ps1` - Main PowerShell script
 - `proxy-config.properties` - Configuration file (fill in your actual proxy settings)
-- `run-proxy-client.bat` - Windows batch file for easy execution
 
 ## Configuration
 
@@ -22,19 +21,17 @@ target.url=https://jsonplaceholder.typicode.com/todos/1
 
 ## Usage
 
-### Method 1: Using Configuration File
+### Method 1: Double-click to run (Easiest)
+Simply double-click `proxy-client.ps1` in Windows Explorer after configuring the properties file.
+
+### Method 2: Using Configuration File
 ```cmd
 powershell -ExecutionPolicy Bypass -File scripts\proxy-client.ps1
 ```
 
-### Method 2: Command Line Parameters
+### Method 3: Command Line Parameters
 ```cmd
 powershell -ExecutionPolicy Bypass -File scripts\proxy-client.ps1 -ProxyUrl "http://proxy:8085" -Username "user" -Password "pass"
-```
-
-### Method 3: Using Batch File
-```cmd
-scripts\run-proxy-client.bat
 ```
 
 ### Method 4: Specify Target URL
