@@ -8,24 +8,27 @@ import org.apache.http.HttpResponse;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.NTCredentials;
 import org.apache.http.auth.UsernamePasswordCredentials;
-import org.apache.http.client.AuthCache;
+import org.apache.http.auth.AuthSchemeProvider;
 import org.apache.http.client.CredentialsProvider;
+import org.apache.http.client.config.AuthSchemes;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.HttpGet;
-import org.apache.http.client.protocol.HttpClientContext;
-import org.apache.http.impl.auth.NTLMScheme;
-import org.apache.http.impl.client.BasicAuthCache;
+import org.apache.http.impl.auth.BasicSchemeFactory;
+import org.apache.http.impl.auth.NTLMSchemeFactory;
 import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.impl.client.ProxyAuthenticationStrategy;
 import org.apache.http.util.EntityUtils;
+import org.apache.http.config.Registry;
+import org.apache.http.config.RegistryBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.util.Arrays;
 
 @Service
 public class ProxyService {
@@ -78,12 +81,9 @@ public class ProxyService {
             HttpGet request = new HttpGet(targetUrl);
             request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             
-            // Create context with auth cache for NTLM
-            HttpClientContext context = HttpClientContext.create();
-            setupAuthCache(context);
-            
-            logger.info("Executing request with NTLM authentication and auth cache");
-            HttpResponse response = httpClient.execute(request, context);
+            // No preemptive NTLM (not supported). Let handshake proceed after 407.
+            logger.info("Executing request with NTLM authentication (no preemptive cache)");
+            HttpResponse response = httpClient.execute(request);
             int statusCode = response.getStatusLine().getStatusCode();
             
             logger.info("NTLM Response status: {}", statusCode);
@@ -181,19 +181,6 @@ public class ProxyService {
         }
     }
     
-    private void setupAuthCache(HttpClientContext context) {
-        String proxyHost = proxyConfig.getHost();
-        int proxyPort = proxyConfig.getPort();
-        
-        // Create auth cache and preemptively authenticate against proxy
-        AuthCache authCache = new BasicAuthCache();
-        HttpHost proxy = new HttpHost(proxyHost, proxyPort);
-        authCache.put(proxy, new NTLMScheme());
-        context.setAuthCache(authCache);
-        
-        logger.info("Auth cache configured for proxy: {}:{}", proxyHost, proxyPort);
-    }
-    
     private CloseableHttpClient createHttpClientWithNtlmProxy() {
         String proxyHost = proxyConfig.getHost();
         int proxyPort = proxyConfig.getPort();
@@ -248,16 +235,24 @@ public class ProxyService {
         CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
         credentialsProvider.setCredentials(new AuthScope(proxyHost, proxyPort), ntCredentials);
         
-        // Configure request with proxy and NTLM authentication
+        // Prefer NTLM then Basic (avoid Negotiate/Kerberos)
         RequestConfig config = RequestConfig.custom()
                 .setProxy(proxy)
                 .setConnectTimeout(30000)
                 .setSocketTimeout(30000)
+                .setProxyPreferredAuthSchemes(Arrays.asList(AuthSchemes.NTLM, AuthSchemes.BASIC))
                 .setAuthenticationEnabled(true)
+                .build();
+        
+        // Only register NTLM and Basic to disable Negotiate/Kerberos
+        Registry<AuthSchemeProvider> authRegistry = RegistryBuilder.<AuthSchemeProvider>create()
+                .register(AuthSchemes.NTLM, new NTLMSchemeFactory())
+                .register(AuthSchemes.BASIC, new BasicSchemeFactory())
                 .build();
         
         // Create HttpClient with NTLM support and authentication strategy
         return HttpClientBuilder.create()
+                .setDefaultAuthSchemeRegistry(authRegistry)
                 .setDefaultCredentialsProvider(credentialsProvider)
                 .setDefaultRequestConfig(config)
                 .setProxyAuthenticationStrategy(new ProxyAuthenticationStrategy())
@@ -290,6 +285,7 @@ public class ProxyService {
                 .setProxy(proxy)
                 .setConnectTimeout(30000)
                 .setSocketTimeout(30000)
+                .setProxyPreferredAuthSchemes(Arrays.asList(AuthSchemes.BASIC))
                 .setAuthenticationEnabled(true)
                 .build();
 
