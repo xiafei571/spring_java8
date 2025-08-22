@@ -96,34 +96,33 @@ public class ProxyService {
     }
     
     private CloseableHttpClient createHttpClientWithNtlmProxy() {
-        HttpHost proxy = new HttpHost(proxyConfig.getHost(), proxyConfig.getPort());
-        
-        CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
-        
-        // Parse username and domain
-        String[] usernameParts = proxyConfig.getUsername().split("\\\\");
-        String domain = usernameParts.length > 1 ? usernameParts[0] : proxyConfig.getDomain();
-        String username = usernameParts.length > 1 ? usernameParts[1] : proxyConfig.getUsername();
+        // Exactly like your 403 project - use variables, not method calls
+        String proxyHost = proxyConfig.getHost();
+        int proxyPort = proxyConfig.getPort();
+        String username = proxyConfig.getUsername();
+        String password = proxyConfig.getPassword();
+        String domain = proxyConfig.getDomain();
         
         logger.info("=== NTLM Authentication Setup ===");
-        logger.info("Original username from config: [{}]", proxyConfig.getUsername());
-        logger.info("Parsed domain: [{}]", domain);
-        logger.info("Parsed username: [{}]", username);
-        logger.info("Password length: {}", proxyConfig.getPassword() != null ? proxyConfig.getPassword().length() : 0);
+        logger.info("Proxy Host: [{}]", proxyHost);
+        logger.info("Proxy Port: [{}]", proxyPort);
+        logger.info("Original username from config: [{}]", username);
         
-        // Validation
-        if (username == null || username.trim().isEmpty()) {
-            logger.error("Username is empty after parsing! Check your proxy.username configuration");
-            throw new IllegalArgumentException("Username cannot be empty");
+        // Extract domain from username if in DOMAIN\\username format - exactly like 403 project
+        String actualUsername = username;
+        String actualDomain = domain;
+        
+        if (username != null && username.contains("\\")) {
+            String[] parts = username.split("\\\\", 2);
+            if (parts.length == 2) {
+                actualDomain = parts[0];
+                actualUsername = parts[1];
+            }
         }
-        if (proxyConfig.getPassword() == null || proxyConfig.getPassword().trim().isEmpty()) {
-            logger.error("Password is empty! Check your proxy.password configuration");
-            throw new IllegalArgumentException("Password cannot be empty");
-        }
-        if (domain == null || domain.trim().isEmpty()) {
-            logger.error("Domain is empty! Check your proxy.domain configuration");
-            throw new IllegalArgumentException("Domain cannot be empty");
-        }
+        
+        logger.info("Parsed domain: [{}]", actualDomain);
+        logger.info("Parsed username: [{}]", actualUsername);
+        logger.info("Password length: {}", password != null ? password.length() : 0);
         
         // Get workstation name - exactly like your 403 project
         String workstation = "";
@@ -134,24 +133,24 @@ public class ProxyService {
         }
         logger.info("Using workstation name: [{}]", workstation);
         
+        // Set up proxy host - exactly like your 403 project
+        HttpHost proxy = new HttpHost(proxyHost, proxyPort);
+        
         // Set up NTLM credentials - exactly like your 403 project
+        CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
         NTCredentials ntCredentials = new NTCredentials(
-                username,
-                proxyConfig.getPassword(),
-                workstation,
-                domain != null ? domain : ""
+                actualUsername, 
+                password, 
+                workstation, 
+                actualDomain != null ? actualDomain : ""
         );
+        credentialsProvider.setCredentials(new AuthScope(proxyHost, proxyPort), ntCredentials);
         
         logger.info("NTLM Credentials created - Domain: [{}], Username: [{}], Workstation: [{}]", 
-                   domain, username, workstation);
+                   actualDomain, actualUsername, workstation);
         
-        // Add NTLM credentials - exactly like your 403 project
-        credentialsProvider.setCredentials(new AuthScope(proxyConfig.getHost(), proxyConfig.getPort()), ntCredentials);
-        
-        logger.info("Added NTLM credentials to provider for scope: {}:{}", proxyConfig.getHost(), proxyConfig.getPort());
-        
-        // Configure request with proxy - exactly like your 403 project (no auth preferences)
-        RequestConfig requestConfig = RequestConfig.custom()
+        // Configure request with proxy - exactly like your 403 project
+        RequestConfig config = RequestConfig.custom()
                 .setProxy(proxy)
                 .setConnectTimeout(30000)
                 .setSocketTimeout(30000)
@@ -160,7 +159,7 @@ public class ProxyService {
         // Create HttpClient with NTLM support - exactly like your 403 project
         return org.apache.http.impl.client.HttpClients.custom()
                 .setDefaultCredentialsProvider(credentialsProvider)
-                .setDefaultRequestConfig(requestConfig)
+                .setDefaultRequestConfig(config)
                 .build();
     }
 }
