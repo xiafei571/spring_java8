@@ -53,6 +53,8 @@ public class ProxyService {
         
         try {
             HttpGet request = new HttpGet(targetUrl);
+            // Add User-Agent like in your 403 project
+            request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             
             HttpResponse response = httpClient.execute(request);
             int statusCode = response.getStatusLine().getStatusCode();
@@ -93,12 +95,13 @@ public class ProxyService {
         
         logger.info("Proxy authentication - Domain: [{}], Username: [{}]", domain, username);
         
-        // Get workstation name
-        String workstation = null;
+        // Get workstation name - use empty string like in your 403 project
+        String workstation = "";
         try {
             workstation = java.net.InetAddress.getLocalHost().getHostName();
         } catch (Exception e) {
-            logger.debug("Could not determine workstation name: {}", e.getMessage());
+            logger.debug("Could not determine workstation name: {}, using empty string", e.getMessage());
+            workstation = ""; // Use empty string if can't get hostname
         }
         
         // Set up NTLM credentials
@@ -124,14 +127,10 @@ public class ProxyService {
                 .setAuthenticationEnabled(true)
                 .build();
         
-        HttpClientBuilder builder = HttpClientBuilder.create()
+        // Create HttpClient with NTLM support - use HttpClients.custom() like 403 project
+        return org.apache.http.impl.client.HttpClients.custom()
                 .setDefaultCredentialsProvider(credentialsProvider)
                 .setDefaultRequestConfig(requestConfig)
-                .setProxyAuthenticationStrategy(ProxyAuthenticationStrategy.INSTANCE);
-        
-        // Disable connection pooling to avoid connection reuse issues
-        builder.disableConnectionState();
-        
-        return builder.build();
+                .build();
     }
 }
