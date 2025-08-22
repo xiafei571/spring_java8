@@ -85,14 +85,18 @@ public class ProxyService {
     }
     
     private String executeRequestWithNtlm(String targetUrl) {
-        CloseableHttpClient httpClient = createHttpClientWithNtlmProxy();
+        boolean enableNegotiate = Boolean.parseBoolean(System.getProperty("proxy.enable.negotiate", "true"));
+        CloseableHttpClient httpClient = enableNegotiate
+                ? createHttpClientForNegotiateProxy()
+                : createHttpClientWithNtlmProxy();
         
         try {
             HttpGet request = new HttpGet(targetUrl);
             request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             
-            // No preemptive NTLM (not supported). Let handshake proceed after 407.
-            logger.info("Executing request with NTLM authentication (no preemptive cache)");
+            logger.info(enableNegotiate
+                    ? "Executing request with Negotiate (Kerberos) first"
+                    : "Executing request with NTLM authentication (no preemptive cache)");
             HttpResponse response = httpClient.execute(request);
             int statusCode = response.getStatusLine().getStatusCode();
             
@@ -100,7 +104,9 @@ public class ProxyService {
             
             // Handle 407 authentication error specifically
             if (statusCode == 407) {
-                logger.error("=== 407 PROXY AUTHENTICATION ERROR (NTLM) ===");
+                logger.error(enableNegotiate
+                        ? "=== 407 PROXY AUTHENTICATION ERROR (Negotiate first) ==="
+                        : "=== 407 PROXY AUTHENTICATION ERROR (NTLM) ===");
                 logger.error(minimalAuthInfo(response));
                 consumeQuietly(response.getEntity());
                 return "407 Proxy Authentication Error. Check logs for details.";
@@ -109,7 +115,7 @@ public class ProxyService {
             if (statusCode >= 200 && statusCode < 300) {
                 String responseBody = EntityUtils.toString(response.getEntity());
                 logger.debug("Response body length: {} characters", responseBody.length());
-                logger.info("NTLM authentication successful!");
+                logger.info(enableNegotiate ? "Negotiate/NTLM authentication successful!" : "NTLM authentication successful!");
                 return responseBody;
             } else {
                 String msg = minimalFailureMessage(response, statusCode);
@@ -379,6 +385,42 @@ public class ProxyService {
         return builder
                 .setDefaultAuthSchemeRegistry(authRegistry)
                 .setDefaultCredentialsProvider(credentialsProvider)
+                .setDefaultRequestConfig(config)
+                .setProxyAuthenticationStrategy(new ProxyAuthenticationStrategy())
+                .build();
+    }
+
+    private CloseableHttpClient createHttpClientForNegotiateProxy() {
+        String proxyHost = proxyConfig.getHost();
+        int proxyPort = proxyConfig.getPort();
+        
+        HttpHost proxy = new HttpHost(proxyHost, proxyPort);
+        
+        RequestConfig config = RequestConfig.custom()
+                .setProxy(proxy)
+                .setConnectTimeout(30000)
+                .setSocketTimeout(30000)
+                .setProxyPreferredAuthSchemes(Arrays.asList(AuthSchemes.SPNEGO, AuthSchemes.NTLM, AuthSchemes.BASIC))
+                .setAuthenticationEnabled(true)
+                .build();
+        
+        Registry<AuthSchemeProvider> authRegistry = RegistryBuilder.<AuthSchemeProvider>create()
+                .register(AuthSchemes.SPNEGO, new SPNegoSchemeFactory(true))
+                .register(AuthSchemes.NTLM, new NTLMSchemeFactory())
+                .register(AuthSchemes.BASIC, new BasicSchemeFactory())
+                .build();
+        
+        HttpClientBuilder builder;
+        if (WinHttpClients.isWinAuthAvailable()) {
+            logger.info("Using Windows native SSPI for Negotiate/NTLM (WinHttpClients)");
+            builder = WinHttpClients.custom();
+        } else {
+            logger.info("Windows SSPI not available, using standard HttpClient");
+            builder = HttpClientBuilder.create();
+        }
+        
+        return builder
+                .setDefaultAuthSchemeRegistry(authRegistry)
                 .setDefaultRequestConfig(config)
                 .setProxyAuthenticationStrategy(new ProxyAuthenticationStrategy())
                 .build();
