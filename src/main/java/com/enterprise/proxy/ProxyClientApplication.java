@@ -23,6 +23,11 @@ public class ProxyClientApplication {
         System.clearProperty("java.security.auth.login.config");
         System.setProperty("sun.security.spnego.debug", "false");
         
+        // CRITICAL: Disable Kerberos/Negotiate to force NTLM only
+        System.setProperty("http.auth.preference", "NTLM");
+        System.setProperty("sun.security.spnego.debug", "false");
+        System.setProperty("javax.security.auth.useSubjectCredsOnly", "false");
+        
         // Network settings
         System.setProperty("networkaddress.cache.ttl", "0");
         System.setProperty("networkaddress.cache.negative.ttl", "0");

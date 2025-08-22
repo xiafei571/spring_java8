@@ -125,15 +125,14 @@ public class ProxyService {
             throw new IllegalArgumentException("Domain cannot be empty");
         }
         
-        // Get workstation name - try actual hostname first, fallback to empty string
+        // Get workstation name - exactly like your 403 project
         String workstation = "";
         try {
             workstation = java.net.InetAddress.getLocalHost().getHostName();
-            logger.info("Using workstation name: [{}]", workstation);
         } catch (Exception e) {
-            logger.info("Could not determine workstation name: {}, using empty string", e.getMessage());
             workstation = ""; // Use empty string if can't get hostname
         }
+        logger.info("Using workstation name: [{}]", workstation);
         
         // Set up NTLM credentials - exactly like your 403 project
         NTCredentials ntCredentials = new NTCredentials(
@@ -146,18 +145,15 @@ public class ProxyService {
         logger.info("NTLM Credentials created - Domain: [{}], Username: [{}], Workstation: [{}]", 
                    domain, username, workstation);
         
-        // Add NTLM credentials only
-        credentialsProvider.setCredentials(
-                new AuthScope(proxyConfig.getHost(), proxyConfig.getPort()),
-                ntCredentials
-        );
+        // Add NTLM credentials - exactly like your 403 project
+        credentialsProvider.setCredentials(new AuthScope(proxyConfig.getHost(), proxyConfig.getPort()), ntCredentials);
         
         logger.info("Added NTLM credentials to provider for scope: {}:{}", proxyConfig.getHost(), proxyConfig.getPort());
         
-        // Configure request with proxy - simplified like in your 403 project
+        // Configure request with proxy - exactly like your 403 project (no auth preferences)
         RequestConfig requestConfig = RequestConfig.custom()
                 .setProxy(proxy)
-                .setConnectTimeout(30000)  // Use fixed timeouts like 403 project
+                .setConnectTimeout(30000)
                 .setSocketTimeout(30000)
                 .build();
         
