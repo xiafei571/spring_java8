@@ -3,6 +3,7 @@ package com.enterprise.proxy.service;
 import com.enterprise.proxy.config.HttpClientConfig;
 import com.enterprise.proxy.config.ProxyConfig;
 import com.enterprise.proxy.config.TargetConfig;
+import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
 import org.apache.http.HttpResponse;
 import org.apache.http.auth.AuthScope;
@@ -29,6 +30,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.stream.Collectors;
 
 @Service
 public class ProxyService {
@@ -64,10 +66,16 @@ public class ProxyService {
             return "Error: Configuration not updated from defaults. Please check application.properties";
         }
         
-        // Try NTLM first
+        // Try NTLM first (with configured domain)
         String result = executeRequestWithNtlm(targetUrl);
         if (result.contains("407 Proxy Authentication Error")) {
-            logger.warn("NTLM authentication failed, trying Basic authentication...");
+            // Retry NTLM with empty domain/workstation (some proxies expect default domain)
+            logger.warn("NTLM with configured domain failed. Retrying NTLM with EMPTY domain/workstation...");
+            String retry = executeRequestWithNtlmEmptyDomain(targetUrl);
+            if (!retry.contains("407 Proxy Authentication Error")) {
+                return retry;
+            }
+            logger.warn("NTLM with empty domain also failed, trying Basic authentication...");
             result = executeRequestWithBasic(targetUrl);
         }
         
@@ -91,29 +99,21 @@ public class ProxyService {
             // Handle 407 authentication error specifically
             if (statusCode == 407) {
                 logger.error("=== 407 PROXY AUTHENTICATION ERROR (NTLM) ===");
-                logger.error("NTLM authentication failed. Trying Basic authentication next...");
-                
-                // Log response headers for debugging
-                logger.error("Response headers:");
-                for (org.apache.http.Header header : response.getAllHeaders()) {
-                    logger.error("  {}: {}", header.getName(), header.getValue());
-                }
-                
-                String responseBody = EntityUtils.toString(response.getEntity());
-                logger.error("Response body: {}", responseBody);
-                
+                logger.error(minimalAuthInfo(response));
+                consumeQuietly(response.getEntity());
                 return "407 Proxy Authentication Error. Check logs for details.";
             }
             
-            String responseBody = EntityUtils.toString(response.getEntity());
-            logger.debug("Response body length: {} characters", responseBody.length());
-            
             if (statusCode >= 200 && statusCode < 300) {
+                String responseBody = EntityUtils.toString(response.getEntity());
+                logger.debug("Response body length: {} characters", responseBody.length());
                 logger.info("NTLM authentication successful!");
                 return responseBody;
             } else {
-                logger.warn("NTLM request failed with status: {}", statusCode);
-                return "Request failed with status: " + statusCode + "\n" + responseBody;
+                String msg = minimalFailureMessage(response, statusCode);
+                consumeQuietly(response.getEntity());
+                logger.warn("NTLM request failed: {}", msg);
+                return msg;
             }
             
         } catch (IOException e) {
@@ -125,6 +125,43 @@ public class ProxyService {
             } catch (IOException e) {
                 logger.warn("Error closing HTTP client: {}", e.getMessage());
             }
+        }
+    }
+    
+    private String executeRequestWithNtlmEmptyDomain(String targetUrl) {
+        CloseableHttpClient httpClient = createHttpClientWithNtlmProxyUsing("", "");
+        
+        try {
+            HttpGet request = new HttpGet(targetUrl);
+            request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            
+            logger.info("Executing request with NTLM (EMPTY domain, EMPTY workstation)");
+            HttpResponse response = httpClient.execute(request);
+            int statusCode = response.getStatusLine().getStatusCode();
+            
+            logger.info("NTLM(empty domain) Response status: {}", statusCode);
+            
+            if (statusCode == 407) {
+                logger.error("=== 407 PROXY AUTHENTICATION ERROR (NTLM empty domain) ===");
+                logger.error(minimalAuthInfo(response));
+                consumeQuietly(response.getEntity());
+                return "407 Proxy Authentication Error. Check logs for details.";
+            }
+            
+            if (statusCode >= 200 && statusCode < 300) {
+                String responseBody = EntityUtils.toString(response.getEntity());
+                logger.debug("Response body length: {} characters", responseBody.length());
+                logger.info("NTLM (empty domain) authentication successful!");
+                return responseBody;
+            }
+            String msg = minimalFailureMessage(response, statusCode);
+            consumeQuietly(response.getEntity());
+            return msg;
+        } catch (IOException e) {
+            logger.error("Error executing NTLM(empty domain) request: {}", e.getMessage(), e);
+            return "Error: " + e.getMessage();
+        } finally {
+            try { httpClient.close(); } catch (IOException ignore) {}
         }
     }
     
@@ -143,30 +180,21 @@ public class ProxyService {
             
             if (statusCode == 407) {
                 logger.error("=== 407 PROXY AUTHENTICATION ERROR (Basic) ===");
-                logger.error("Both NTLM and Basic authentication failed!");
-                logger.error("Please check your credentials and proxy configuration.");
-                
-                // Log response headers for debugging
-                logger.error("Response headers:");
-                for (org.apache.http.Header header : response.getAllHeaders()) {
-                    logger.error("  {}: {}", header.getName(), header.getValue());
-                }
-                
-                String responseBody = EntityUtils.toString(response.getEntity());
-                logger.error("Response body: {}", responseBody);
-                
+                logger.error(minimalAuthInfo(response));
+                consumeQuietly(response.getEntity());
                 return "407 Proxy Authentication Error - Both NTLM and Basic failed. Check logs for details.";
             }
             
-            String responseBody = EntityUtils.toString(response.getEntity());
-            logger.debug("Response body length: {} characters", responseBody.length());
-            
             if (statusCode >= 200 && statusCode < 300) {
+                String responseBody = EntityUtils.toString(response.getEntity());
+                logger.debug("Response body length: {} characters", responseBody.length());
                 logger.info("Basic authentication successful!");
                 return responseBody;
             } else {
-                logger.warn("Basic request failed with status: {}", statusCode);
-                return "Request failed with status: " + statusCode + "\n" + responseBody;
+                String msg = minimalFailureMessage(response, statusCode);
+                consumeQuietly(response.getEntity());
+                logger.warn("Basic request failed: {}", msg);
+                return msg;
             }
             
         } catch (IOException e) {
@@ -180,7 +208,29 @@ public class ProxyService {
             }
         }
     }
-    
+
+    private String minimalAuthInfo(HttpResponse response) {
+        String proxySchemes = Arrays.stream(response.getHeaders("Proxy-Authenticate"))
+                .map(h -> h.getValue())
+                .collect(Collectors.joining(", "));
+        return "Proxy-Authenticate: [" + proxySchemes + "]";
+    }
+
+    private String minimalFailureMessage(HttpResponse response, int statusCode) {
+        String proxySchemes = Arrays.stream(response.getHeaders("Proxy-Authenticate"))
+                .map(h -> h.getValue())
+                .collect(Collectors.joining(", "));
+        return "Request failed with status: " + statusCode + (proxySchemes.isEmpty() ? "" : "; Proxy-Authenticate: [" + proxySchemes + "]");
+    }
+
+    private void consumeQuietly(HttpEntity entity) {
+        try {
+            if (entity != null) {
+                EntityUtils.consume(entity);
+            }
+        } catch (Exception ignore) {}
+    }
+
     private CloseableHttpClient createHttpClientWithNtlmProxy() {
         String proxyHost = proxyConfig.getHost();
         int proxyPort = proxyConfig.getPort();
@@ -217,46 +267,7 @@ public class ProxyService {
         }
         logger.info("Using workstation name: [{}]", workstation);
         
-        // Set up proxy host
-        HttpHost proxy = new HttpHost(proxyHost, proxyPort);
-        
-        // Create NTLM credentials
-        NTCredentials ntCredentials = new NTCredentials(
-                actualUsername, 
-                password, 
-                workstation, 
-                actualDomain
-        );
-        
-        logger.info("NTLM Credentials created - Domain: [{}], Username: [{}], Workstation: [{}]", 
-                   actualDomain, actualUsername, workstation);
-        
-        // Set up credentials provider with proper AuthScope
-        CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
-        credentialsProvider.setCredentials(new AuthScope(proxyHost, proxyPort), ntCredentials);
-        
-        // Prefer NTLM then Basic (avoid Negotiate/Kerberos)
-        RequestConfig config = RequestConfig.custom()
-                .setProxy(proxy)
-                .setConnectTimeout(30000)
-                .setSocketTimeout(30000)
-                .setProxyPreferredAuthSchemes(Arrays.asList(AuthSchemes.NTLM, AuthSchemes.BASIC))
-                .setAuthenticationEnabled(true)
-                .build();
-        
-        // Only register NTLM and Basic to disable Negotiate/Kerberos
-        Registry<AuthSchemeProvider> authRegistry = RegistryBuilder.<AuthSchemeProvider>create()
-                .register(AuthSchemes.NTLM, new NTLMSchemeFactory())
-                .register(AuthSchemes.BASIC, new BasicSchemeFactory())
-                .build();
-        
-        // Create HttpClient with NTLM support and authentication strategy
-        return HttpClientBuilder.create()
-                .setDefaultAuthSchemeRegistry(authRegistry)
-                .setDefaultCredentialsProvider(credentialsProvider)
-                .setDefaultRequestConfig(config)
-                .setProxyAuthenticationStrategy(new ProxyAuthenticationStrategy())
-                .build();
+        return createHttpClientWithNtlmProxyUsing(actualDomain, workstation);
     }
 
     private CloseableHttpClient createHttpClientWithBasicProxy() {
@@ -291,6 +302,64 @@ public class ProxyService {
 
         // Create HttpClient with Basic support and authentication strategy
         return HttpClientBuilder.create()
+                .setDefaultCredentialsProvider(credentialsProvider)
+                .setDefaultRequestConfig(config)
+                .setProxyAuthenticationStrategy(new ProxyAuthenticationStrategy())
+                .build();
+    }
+
+    private CloseableHttpClient createHttpClientWithNtlmProxyUsing(String domain, String workstation) {
+        String proxyHost = proxyConfig.getHost();
+        int proxyPort = proxyConfig.getPort();
+        String username = proxyConfig.getUsername();
+        String password = proxyConfig.getPassword();
+        
+        // If username contains DOMAIN\user, strip domain part because domain is passed separately
+        String actualUsername = username;
+        if (username != null && username.contains("\\")) {
+            String[] parts = username.split("\\\\", 2);
+            if (parts.length == 2) {
+                actualUsername = parts[1];
+            }
+        }
+        
+        // Set up proxy host
+        HttpHost proxy = new HttpHost(proxyHost, proxyPort);
+        
+        // Create NTLM credentials
+        NTCredentials ntCredentials = new NTCredentials(
+                actualUsername,
+                password,
+                workstation == null ? "" : workstation,
+                domain == null ? "" : domain
+        );
+        
+        logger.info("NTLM Credentials created - Domain: [{}], Username: [{}], Workstation: [{}]",
+                domain == null ? "" : domain,
+                actualUsername,
+                workstation == null ? "" : workstation);
+        
+        // Set up credentials provider with proper AuthScope
+        CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
+        credentialsProvider.setCredentials(new AuthScope(proxyHost, proxyPort), ntCredentials);
+        
+        // Prefer NTLM then Basic (avoid Negotiate/Kerberos)
+        RequestConfig config = RequestConfig.custom()
+                .setProxy(proxy)
+                .setConnectTimeout(30000)
+                .setSocketTimeout(30000)
+                .setProxyPreferredAuthSchemes(Arrays.asList(AuthSchemes.NTLM, AuthSchemes.BASIC))
+                .setAuthenticationEnabled(true)
+                .build();
+        
+        // Only register NTLM and Basic to disable Negotiate/Kerberos
+        Registry<AuthSchemeProvider> authRegistry = RegistryBuilder.<AuthSchemeProvider>create()
+                .register(AuthSchemes.NTLM, new NTLMSchemeFactory())
+                .register(AuthSchemes.BASIC, new BasicSchemeFactory())
+                .build();
+        
+        return HttpClientBuilder.create()
+                .setDefaultAuthSchemeRegistry(authRegistry)
                 .setDefaultCredentialsProvider(credentialsProvider)
                 .setDefaultRequestConfig(config)
                 .setProxyAuthenticationStrategy(new ProxyAuthenticationStrategy())
