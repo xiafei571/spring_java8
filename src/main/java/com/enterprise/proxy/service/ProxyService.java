@@ -67,8 +67,11 @@ public class ProxyService {
             // Add User-Agent like in your 403 project
             request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             
-            logger.info("Executing request without preemptive auth - let NTLM handshake happen naturally");
-            HttpResponse response = httpClient.execute(request);
+            // Try to force NTLM authentication by setting up auth cache
+            org.apache.http.client.protocol.HttpClientContext context = org.apache.http.client.protocol.HttpClientContext.create();
+            
+            logger.info("Executing request with context - let NTLM handshake happen");
+            HttpResponse response = httpClient.execute(request, context);
             int statusCode = response.getStatusLine().getStatusCode();
             String responseBody = EntityUtils.toString(response.getEntity());
             
@@ -108,16 +111,22 @@ public class ProxyService {
         logger.info("Proxy Port: [{}]", proxyPort);
         logger.info("Original username from config: [{}]", username);
         
-        // Extract domain from username if in DOMAIN\\username format - exactly like 403 project
+        // Extract domain from username if in DOMAIN\\username format - match PowerShell behavior
         String actualUsername = username;
-        String actualDomain = domain;
+        String actualDomain = ""; // Default to empty for NTLM
         
         if (username != null && username.contains("\\")) {
             String[] parts = username.split("\\\\", 2);
             if (parts.length == 2) {
                 actualDomain = parts[0];
                 actualUsername = parts[1];
+                logger.info("Extracted domain [{}] and username [{}] from [{}]", actualDomain, actualUsername, username);
             }
+        } else {
+            // If no domain in username, use just the username like PowerShell
+            actualUsername = username;
+            actualDomain = domain != null ? domain : "";
+            logger.info("Using username [{}] with domain [{}]", actualUsername, actualDomain);
         }
         
         logger.info("Parsed domain: [{}]", actualDomain);
