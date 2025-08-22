@@ -16,6 +16,7 @@ import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.auth.BasicSchemeFactory;
 import org.apache.http.impl.auth.NTLMSchemeFactory;
+import org.apache.http.impl.auth.SPNegoSchemeFactory;
 import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
@@ -315,7 +316,7 @@ public class ProxyService {
         String username = proxyConfig.getUsername();
         String password = proxyConfig.getPassword();
         
-        // If username contains DOMAIN\user, strip domain part because domain is passed separately
+        // If username contains DOMAIN\\user, strip domain part because domain is passed separately
         String actualUsername = username;
         if (username != null && username.contains("\\")) {
             String[] parts = username.split("\\\\", 2);
@@ -344,7 +345,7 @@ public class ProxyService {
         CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
         credentialsProvider.setCredentials(new AuthScope(proxyHost, proxyPort), ntCredentials);
         
-        // Prefer NTLM then Basic (avoid Negotiate/Kerberos)
+        // Prefer NTLM then Basic by default; Negotiate can be enabled if required
         RequestConfig config = RequestConfig.custom()
                 .setProxy(proxy)
                 .setConnectTimeout(30000)
@@ -353,11 +354,18 @@ public class ProxyService {
                 .setAuthenticationEnabled(true)
                 .build();
         
-        // Only register NTLM and Basic to disable Negotiate/Kerberos
-        Registry<AuthSchemeProvider> authRegistry = RegistryBuilder.<AuthSchemeProvider>create()
+        // Build auth scheme registry: NTLM and Basic always; optionally Negotiate
+        RegistryBuilder<AuthSchemeProvider> regBuilder = RegistryBuilder.<AuthSchemeProvider>create()
                 .register(AuthSchemes.NTLM, new NTLMSchemeFactory())
-                .register(AuthSchemes.BASIC, new BasicSchemeFactory())
-                .build();
+                .register(AuthSchemes.BASIC, new BasicSchemeFactory());
+        boolean enableNegotiate = Boolean.parseBoolean(System.getProperty("proxy.enable.negotiate", "false"));
+        if (enableNegotiate) {
+            logger.info("Negotiate (SPNEGO) enabled via -Dproxy.enable.negotiate=true");
+            regBuilder.register(AuthSchemes.SPNEGO, new SPNegoSchemeFactory(true));
+        } else {
+            logger.info("Negotiate (SPNEGO) disabled");
+        }
+        Registry<AuthSchemeProvider> authRegistry = regBuilder.build();
         
         HttpClientBuilder builder;
         if (WinHttpClients.isWinAuthAvailable()) {
