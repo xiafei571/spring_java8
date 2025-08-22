@@ -46,8 +46,18 @@ public class ProxyService {
             targetUrl = targetConfig.getUrl();
         }
         
-        logger.info("Executing request to: {}", targetUrl);
-        logger.info("Using proxy: {}:{}", proxyConfig.getHost(), proxyConfig.getPort());
+        logger.info("=== Proxy Request Execution ===");
+        logger.info("Target URL: {}", targetUrl);
+        logger.info("Proxy Host: [{}]", proxyConfig.getHost());
+        logger.info("Proxy Port: [{}]", proxyConfig.getPort());
+        logger.info("Proxy Username from config: [{}]", proxyConfig.getUsername());
+        
+        // Check if configuration is still default values
+        if ("host".equals(proxyConfig.getHost()) || "port".equals(String.valueOf(proxyConfig.getPort()))) {
+            logger.error("CONFIGURATION ERROR: You're still using default values!");
+            logger.error("Please update your application.properties with real proxy settings");
+            return "Error: Configuration not updated from defaults. Please check application.properties";
+        }
         
         CloseableHttpClient httpClient = createHttpClientWithNtlmProxy();
         
@@ -93,14 +103,33 @@ public class ProxyService {
         String domain = usernameParts.length > 1 ? usernameParts[0] : proxyConfig.getDomain();
         String username = usernameParts.length > 1 ? usernameParts[1] : proxyConfig.getUsername();
         
-        logger.info("Proxy authentication - Domain: [{}], Username: [{}]", domain, username);
+        logger.info("=== NTLM Authentication Setup ===");
+        logger.info("Original username from config: [{}]", proxyConfig.getUsername());
+        logger.info("Parsed domain: [{}]", domain);
+        logger.info("Parsed username: [{}]", username);
+        logger.info("Password length: {}", proxyConfig.getPassword() != null ? proxyConfig.getPassword().length() : 0);
         
-        // Get workstation name - use empty string like in your 403 project
+        // Validation
+        if (username == null || username.trim().isEmpty()) {
+            logger.error("Username is empty after parsing! Check your proxy.username configuration");
+            throw new IllegalArgumentException("Username cannot be empty");
+        }
+        if (proxyConfig.getPassword() == null || proxyConfig.getPassword().trim().isEmpty()) {
+            logger.error("Password is empty! Check your proxy.password configuration");
+            throw new IllegalArgumentException("Password cannot be empty");
+        }
+        if (domain == null || domain.trim().isEmpty()) {
+            logger.error("Domain is empty! Check your proxy.domain configuration");
+            throw new IllegalArgumentException("Domain cannot be empty");
+        }
+        
+        // Get workstation name - try actual hostname first, fallback to empty string
         String workstation = "";
         try {
             workstation = java.net.InetAddress.getLocalHost().getHostName();
+            logger.info("Using workstation name: [{}]", workstation);
         } catch (Exception e) {
-            logger.debug("Could not determine workstation name: {}, using empty string", e.getMessage());
+            logger.info("Could not determine workstation name: {}, using empty string", e.getMessage());
             workstation = ""; // Use empty string if can't get hostname
         }
         
@@ -111,6 +140,9 @@ public class ProxyService {
                 workstation,
                 domain
         );
+        
+        logger.info("NTLM Credentials created - Domain: [{}], Username: [{}], Workstation: [{}]", 
+                   domain, username, workstation);
         
         // Add NTLM credentials only
         credentialsProvider.setCredentials(
