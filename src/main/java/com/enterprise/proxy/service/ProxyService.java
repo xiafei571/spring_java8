@@ -30,7 +30,21 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import javax.security.auth.Subject;
+import javax.security.auth.callback.Callback;
+import javax.security.auth.callback.CallbackHandler;
+import javax.security.auth.callback.NameCallback;
+import javax.security.auth.callback.PasswordCallback;
+import javax.security.auth.callback.UnsupportedCallbackException;
+import javax.security.auth.login.AppConfigurationEntry;
+import javax.security.auth.login.AppConfigurationEntry.LoginModuleControlFlag;
+import javax.security.auth.login.Configuration;
+import javax.security.auth.login.LoginContext;
+import javax.security.auth.login.LoginException;
 import java.io.IOException;
+import java.security.PrivilegedAction;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Arrays;
 import java.util.stream.Collectors;
 
@@ -60,6 +74,8 @@ public class ProxyService {
         logger.info("Proxy Host: [{}]", proxyConfig.getHost());
         logger.info("Proxy Port: [{}]", proxyConfig.getPort());
         logger.info("Proxy Username from config: [{}]", proxyConfig.getUsername());
+        logger.info("BBS Alias from config: [{}]", proxyConfig.getBbsAlias());
+        logger.info("Domain Username from config: [{}]", proxyConfig.getDomainUsername());
         
         // Check if configuration is still default values
         if ("host".equals(proxyConfig.getHost()) || "port".equals(String.valueOf(proxyConfig.getPort()))) {
@@ -85,28 +101,29 @@ public class ProxyService {
     }
     
     private String executeRequestWithNtlm(String targetUrl) {
-        boolean enableNegotiate = Boolean.parseBoolean(System.getProperty("proxy.enable.negotiate", "true"));
-        CloseableHttpClient httpClient = enableNegotiate
-                ? createHttpClientForNegotiateProxy()
-                : createHttpClientWithNtlmProxy();
+        boolean enableNegotiate = Boolean.parseBoolean(System.getProperty("proxy.enable.negotiate", "false"));
+        if (enableNegotiate) {
+            // Try SPNEGO with configured credentials first (no interactive prompt)
+            String spnegoResult = trySpnegoWithSuppliedCredentials(targetUrl);
+            if (spnegoResult != null) {
+                return spnegoResult;
+            }
+        }
+        
+        CloseableHttpClient httpClient = createHttpClientWithNtlmProxy();
         
         try {
             HttpGet request = new HttpGet(targetUrl);
             request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             
-            logger.info(enableNegotiate
-                    ? "Executing request with Negotiate (Kerberos) first"
-                    : "Executing request with NTLM authentication (no preemptive cache)");
+            logger.info("Executing request with NTLM authentication");
             HttpResponse response = httpClient.execute(request);
             int statusCode = response.getStatusLine().getStatusCode();
             
             logger.info("NTLM Response status: {}", statusCode);
             
-            // Handle 407 authentication error specifically
             if (statusCode == 407) {
-                logger.error(enableNegotiate
-                        ? "=== 407 PROXY AUTHENTICATION ERROR (Negotiate first) ==="
-                        : "=== 407 PROXY AUTHENTICATION ERROR (NTLM) ===");
+                logger.error("=== 407 PROXY AUTHENTICATION ERROR (NTLM) ===");
                 logger.error(minimalAuthInfo(response));
                 consumeQuietly(response.getEntity());
                 return "407 Proxy Authentication Error. Check logs for details.";
@@ -115,7 +132,7 @@ public class ProxyService {
             if (statusCode >= 200 && statusCode < 300) {
                 String responseBody = EntityUtils.toString(response.getEntity());
                 logger.debug("Response body length: {} characters", responseBody.length());
-                logger.info(enableNegotiate ? "Negotiate/NTLM authentication successful!" : "NTLM authentication successful!");
+                logger.info("NTLM authentication successful!");
                 return responseBody;
             } else {
                 String msg = minimalFailureMessage(response, statusCode);
@@ -133,6 +150,99 @@ public class ProxyService {
             } catch (IOException e) {
                 logger.warn("Error closing HTTP client: {}", e.getMessage());
             }
+        }
+    }
+
+    private String trySpnegoWithSuppliedCredentials(String targetUrl) {
+        try {
+            String user = proxyConfig.getUsername();
+            String pass = proxyConfig.getPassword();
+            if (user == null || user.isEmpty() || pass == null) {
+                logger.info("SPNEGO: no configured credentials found, skipping supplied-cred attempt");
+                return null;
+            }
+            // For DOMAIN\\user, JAAS expects user@REALM or just user; here we pass as is via callback
+            LoginContext lc = new LoginContext("spnego", null, new SimpleCredCallback(user, pass), new SpnegoLoginConfig());
+            lc.login();
+            Subject subject = lc.getSubject();
+            logger.info("SPNEGO: obtained Subject via configured credentials; attempting HTTP under Subject.doAs");
+            
+            return Subject.doAs(subject, (PrivilegedAction<String>) () -> {
+                CloseableHttpClient client = createHttpClientForNegotiateProxy();
+                try {
+                    HttpGet req = new HttpGet(targetUrl);
+                    req.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+                    HttpResponse resp = client.execute(req);
+                    int sc = resp.getStatusLine().getStatusCode();
+                    if (sc == 407) {
+                        logger.error("SPNEGO supplied-cred attempt got 407; {}", minimalAuthInfo(resp));
+                        consumeQuietly(resp.getEntity());
+                        return "407 Proxy Authentication Error. Check logs for details.";
+                    }
+                    if (sc >= 200 && sc < 300) {
+                        try {
+                            return EntityUtils.toString(resp.getEntity());
+                        } catch (IOException e) {
+                            return "Error: " + e.getMessage();
+                        }
+                    }
+                    String msg = minimalFailureMessage(resp, sc);
+                    consumeQuietly(resp.getEntity());
+                    return msg;
+                } catch (IOException e) {
+                    return "Error: " + e.getMessage();
+                } finally {
+                    try { client.close(); } catch (IOException ignore) {}
+                }
+            });
+        } catch (LoginException e) {
+            logger.warn("SPNEGO: login with configured credentials failed: {}", e.getMessage());
+            return null; // fall back to normal path
+        }
+    }
+
+    private static class SimpleCredCallback implements CallbackHandler {
+        private final String username;
+        private final String password;
+        SimpleCredCallback(String username, String password) {
+            this.username = username;
+            this.password = password;
+        }
+        @Override
+        public void handle(Callback[] callbacks) throws UnsupportedCallbackException {
+            for (Callback cb : callbacks) {
+                if (cb instanceof NameCallback) {
+                    ((NameCallback) cb).setName(username);
+                } else if (cb instanceof PasswordCallback) {
+                    ((PasswordCallback) cb).setPassword(password.toCharArray());
+                } else {
+                    throw new UnsupportedCallbackException(cb);
+                }
+            }
+        }
+    }
+
+    private static class SpnegoLoginConfig extends Configuration {
+        @Override
+        public AppConfigurationEntry[] getAppConfigurationEntry(String name) {
+            Map<String, String> options = new HashMap<>();
+            options.put("useTicketCache", "false");
+            options.put("storeKey", "false");
+            options.put("doNotPrompt", "true");
+            options.put("refreshKrb5Config", "true");
+            options.put("isInitiator", "true");
+            // Allow username/password from CallbackHandler
+            options.put("useKeyTab", "false");
+            options.put("tryFirstPass", "true");
+            options.put("useFirstPass", "true");
+            // On Windows, this still goes through SSPI
+            return new AppConfigurationEntry[]{
+                    new AppConfigurationEntry(
+                            "com.sun.security.auth.module.Krb5LoginModule",
+                            LoginModuleControlFlag.REQUIRED,
+                            options
+                    )
+            };
         }
     }
     
@@ -179,6 +289,15 @@ public class ProxyService {
         try {
             HttpGet request = new HttpGet(targetUrl);
             request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            
+            // Allow overriding Basic username with BBS alias via system property
+            String basicUserOverride = System.getProperty("proxy.basic.username");
+            String effectiveUser = basicUserOverride != null && !basicUserOverride.isEmpty()
+                    ? basicUserOverride
+                    : proxyConfig.getUsername();
+            if (basicUserOverride != null) {
+                logger.info("Using Basic username override (BBS alias): [{}]", effectiveUser);
+            }
             
             logger.info("Executing request with Basic authentication");
             HttpResponse response = httpClient.execute(request);
@@ -242,7 +361,7 @@ public class ProxyService {
     private CloseableHttpClient createHttpClientWithNtlmProxy() {
         String proxyHost = proxyConfig.getHost();
         int proxyPort = proxyConfig.getPort();
-        String username = proxyConfig.getUsername();
+        String username = proxyConfig.getDomainUsername() != null ? proxyConfig.getDomainUsername() : proxyConfig.getUsername();
         String password = proxyConfig.getPassword();
         String domain = proxyConfig.getDomain();
         
@@ -281,11 +400,11 @@ public class ProxyService {
     private CloseableHttpClient createHttpClientWithBasicProxy() {
         String proxyHost = proxyConfig.getHost();
         int proxyPort = proxyConfig.getPort();
-        String username = proxyConfig.getUsername();
+        String username = proxyConfig.getBbsAlias() != null ? proxyConfig.getBbsAlias() : proxyConfig.getUsername();
         String password = proxyConfig.getPassword();
 
         logger.info("=== Basic Authentication Setup ===");
-        logger.info("Using username [{}]", username);
+        logger.info("Using BBS alias username [{}]", username);
 
         // Set up proxy host
         HttpHost proxy = new HttpHost(proxyHost, proxyPort);

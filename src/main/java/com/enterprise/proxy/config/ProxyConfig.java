@@ -13,6 +13,12 @@ public class ProxyConfig {
     private String password;
     private String domain;
     
+    // BBS alias for Basic authentication
+    private String bbsAlias;
+    
+    // Domain username for NTLM authentication (if different from username)
+    private String domainUsername;
+    
     public ProxyConfig() {
     }
     
@@ -56,6 +62,22 @@ public class ProxyConfig {
         this.domain = domain;
     }
     
+    public String getBbsAlias() {
+        return bbsAlias;
+    }
+    
+    public void setBbsAlias(String bbsAlias) {
+        this.bbsAlias = bbsAlias;
+    }
+    
+    public String getDomainUsername() {
+        return domainUsername;
+    }
+    
+    public void setDomainUsername(String domainUsername) {
+        this.domainUsername = domainUsername;
+    }
+    
     @Override
     public String toString() {
         return "ProxyConfig{" +
@@ -63,6 +85,8 @@ public class ProxyConfig {
                 ", port=" + port +
                 ", username='" + username + '\'' +
                 ", domain='" + domain + '\'' +
+                ", bbsAlias='" + bbsAlias + '\'' +
+                ", domainUsername='" + domainUsername + '\'' +
                 '}';
     }
 }
