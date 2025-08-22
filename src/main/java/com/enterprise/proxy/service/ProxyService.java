@@ -76,6 +76,7 @@ public class ProxyService {
         logger.info("Proxy Username from config: [{}]", proxyConfig.getUsername());
         logger.info("BBS Alias from config: [{}]", proxyConfig.getBbsAlias());
         logger.info("Domain Username from config: [{}]", proxyConfig.getDomainUsername());
+        logger.info("Password length: [{}]", proxyConfig.getPassword() != null ? proxyConfig.getPassword().length() : 0);
         
         // Check if configuration is still default values
         if ("host".equals(proxyConfig.getHost()) || "port".equals(String.valueOf(proxyConfig.getPort()))) {
@@ -84,17 +85,21 @@ public class ProxyService {
             return "Error: Configuration not updated from defaults. Please check application.properties";
         }
         
-        // Try NTLM first (with configured domain)
-        String result = executeRequestWithNtlm(targetUrl);
+        // Check if we have the required credentials
+        if (proxyConfig.getPassword() == null || proxyConfig.getPassword().isEmpty()) {
+            logger.error("CONFIGURATION ERROR: Password is not set!");
+            return "Error: Password is not configured. Please set proxy.password in application.properties";
+        }
+        
+        // Try Kerberos first (like PowerShell), then NTLM, then Basic
+        String result = executeRequestWithKerberos(targetUrl);
         if (result.contains("407 Proxy Authentication Error")) {
-            // Retry NTLM with empty domain/workstation (some proxies expect default domain)
-            logger.warn("NTLM with configured domain failed. Retrying NTLM with EMPTY domain/workstation...");
-            String retry = executeRequestWithNtlmEmptyDomain(targetUrl);
-            if (!retry.contains("407 Proxy Authentication Error")) {
-                return retry;
+            logger.warn("Kerberos failed, trying NTLM...");
+            result = executeRequestWithNtlm(targetUrl);
+            if (result.contains("407 Proxy Authentication Error")) {
+                logger.warn("NTLM failed, trying Basic...");
+                result = executeRequestWithBasic(targetUrl);
             }
-            logger.warn("NTLM with empty domain also failed, trying Basic authentication...");
-            result = executeRequestWithBasic(targetUrl);
         }
         
         return result;
@@ -543,5 +548,85 @@ public class ProxyService {
                 .setDefaultRequestConfig(config)
                 .setProxyAuthenticationStrategy(new ProxyAuthenticationStrategy())
                 .build();
+    }
+
+    private CloseableHttpClient createHttpClientForKerberosProxy() {
+        String proxyHost = proxyConfig.getHost();
+        int proxyPort = proxyConfig.getPort();
+        
+        HttpHost proxy = new HttpHost(proxyHost, proxyPort);
+        
+        RequestConfig config = RequestConfig.custom()
+                .setProxy(proxy)
+                .setConnectTimeout(30000)
+                .setSocketTimeout(30000)
+                .setProxyPreferredAuthSchemes(Arrays.asList(AuthSchemes.SPNEGO, AuthSchemes.NTLM, AuthSchemes.BASIC))
+                .setAuthenticationEnabled(true)
+                .build();
+        
+        Registry<AuthSchemeProvider> authRegistry = RegistryBuilder.<AuthSchemeProvider>create()
+                .register(AuthSchemes.SPNEGO, new SPNegoSchemeFactory(true))
+                .register(AuthSchemes.NTLM, new NTLMSchemeFactory())
+                .register(AuthSchemes.BASIC, new BasicSchemeFactory())
+                .build();
+        
+        HttpClientBuilder builder;
+        if (WinHttpClients.isWinAuthAvailable()) {
+            logger.info("Using Windows native SSPI for Kerberos/NTLM (WinHttpClients)");
+            builder = WinHttpClients.custom();
+        } else {
+            logger.info("Windows SSPI not available, using standard HttpClient");
+            builder = HttpClientBuilder.create();
+        }
+        
+        return builder
+                .setDefaultAuthSchemeRegistry(authRegistry)
+                .setDefaultRequestConfig(config)
+                .setProxyAuthenticationStrategy(new ProxyAuthenticationStrategy())
+                .build();
+    }
+
+    private String executeRequestWithKerberos(String targetUrl) {
+        CloseableHttpClient httpClient = createHttpClientForKerberosProxy();
+        
+        try {
+            HttpGet request = new HttpGet(targetUrl);
+            request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            
+            logger.info("Executing request with Kerberos (Negotiate) authentication");
+            HttpResponse response = httpClient.execute(request);
+            int statusCode = response.getStatusLine().getStatusCode();
+            
+            logger.info("Kerberos Response status: {}", statusCode);
+            
+            if (statusCode == 407) {
+                logger.error("=== 407 PROXY AUTHENTICATION ERROR (Kerberos) ===");
+                logger.error(minimalAuthInfo(response));
+                consumeQuietly(response.getEntity());
+                return "407 Proxy Authentication Error. Check logs for details.";
+            }
+            
+            if (statusCode >= 200 && statusCode < 300) {
+                String responseBody = EntityUtils.toString(response.getEntity());
+                logger.debug("Response body length: {} characters", responseBody.length());
+                logger.info("Kerberos authentication successful!");
+                return responseBody;
+            } else {
+                String msg = minimalFailureMessage(response, statusCode);
+                consumeQuietly(response.getEntity());
+                logger.warn("Kerberos request failed: {}", msg);
+                return msg;
+            }
+            
+        } catch (IOException e) {
+            logger.error("Error executing Kerberos request: {}", e.getMessage(), e);
+            return "Error: " + e.getMessage();
+        } finally {
+            try {
+                httpClient.close();
+            } catch (IOException e) {
+                logger.warn("Error closing HTTP client: {}", e.getMessage());
+            }
+        }
     }
 }
