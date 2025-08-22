@@ -5,6 +5,7 @@ import com.enterprise.proxy.config.ProxyConfig;
 import com.enterprise.proxy.config.TargetConfig;
 import org.apache.http.HttpHost;
 import org.apache.http.HttpResponse;
+import org.apache.http.client.AuthCache;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.NTCredentials;
 import org.apache.http.auth.UsernamePasswordCredentials;
@@ -66,7 +67,18 @@ public class ProxyService {
             // Add User-Agent like in your 403 project
             request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             
-            HttpResponse response = httpClient.execute(request);
+            // Create context for NTLM authentication
+            org.apache.http.client.protocol.HttpClientContext context = org.apache.http.client.protocol.HttpClientContext.create();
+            
+            // Set up preemptive NTLM authentication for proxy
+            AuthCache authCache = new org.apache.http.impl.client.BasicAuthCache();
+            org.apache.http.impl.auth.NTLMScheme ntlmScheme = new org.apache.http.impl.auth.NTLMScheme();
+            HttpHost proxyHost = new HttpHost(proxyConfig.getHost(), proxyConfig.getPort());
+            authCache.put(proxyHost, ntlmScheme);
+            context.setAuthCache(authCache);
+            
+            logger.info("Executing request with NTLM authentication context");
+            HttpResponse response = httpClient.execute(request, context);
             int statusCode = response.getStatusLine().getStatusCode();
             String responseBody = EntityUtils.toString(response.getEntity());
             
@@ -150,16 +162,18 @@ public class ProxyService {
                 ntCredentials
         );
         
+        logger.info("Added NTLM credentials to provider for scope: {}:{}", proxyConfig.getHost(), proxyConfig.getPort());
+        
         RequestConfig requestConfig = RequestConfig.custom()
                 .setProxy(proxy)
                 .setConnectTimeout(httpClientConfig.getConnection().getTimeout())
                 .setSocketTimeout(httpClientConfig.getSocketTimeout())
                 .setConnectionRequestTimeout(httpClientConfig.getConnection().getRequestTimeout())
                 .setProxyPreferredAuthSchemes(java.util.Arrays.asList("NTLM"))
+                .setTargetPreferredAuthSchemes(java.util.Arrays.asList("NTLM"))
                 .setAuthenticationEnabled(true)
                 .build();
         
-        // Create HttpClient with NTLM support - use HttpClients.custom() like 403 project
         return org.apache.http.impl.client.HttpClients.custom()
                 .setDefaultCredentialsProvider(credentialsProvider)
                 .setDefaultRequestConfig(requestConfig)
