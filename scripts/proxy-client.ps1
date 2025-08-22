@@ -53,8 +53,8 @@ function Invoke-ProxyRequest {
         
         Write-Host "Executing request with proxy authentication..." -ForegroundColor Yellow
         
-        # Execute the request
-        $response = Invoke-WebRequest -Uri $Url -Proxy $Proxy -ProxyCredential $credential -UseBasicParsing
+        # Execute the request (without -UseBasicParsing to match your working command)
+        $response = Invoke-WebRequest -Uri $Url -Proxy $Proxy -ProxyCredential $credential
         
         Write-Host "Response Status: $($response.StatusCode)" -ForegroundColor Green
         Write-Host "Response Headers:"

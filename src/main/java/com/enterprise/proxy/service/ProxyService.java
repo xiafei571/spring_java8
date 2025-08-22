@@ -91,6 +91,15 @@ public class ProxyService {
             return "Error: Password is not configured. Please set proxy.password in application.properties";
         }
         
+        // Log password characteristics for debugging
+        String password = proxyConfig.getPassword();
+        logger.info("Password contains special characters: {}", password.matches(".*[^a-zA-Z0-9].*"));
+        logger.info("Password character analysis: length={}, hasSymbols={}, hasPipe={}, hasAt={}", 
+                   password.length(), 
+                   password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{}|;':\",./<>?].*"),
+                   password.contains("|"),
+                   password.contains("@"));
+        
         // Try Kerberos first (like PowerShell), then NTLM, then Basic
         String result = executeRequestWithKerberos(targetUrl);
         if (result.contains("407 Proxy Authentication Error")) {
