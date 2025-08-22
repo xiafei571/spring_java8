@@ -7,12 +7,16 @@ import org.apache.http.HttpHost;
 import org.apache.http.HttpResponse;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.NTCredentials;
+import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.CredentialsProvider;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.auth.BasicScheme;
+import org.apache.http.impl.auth.NTLMScheme;
 import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.impl.client.ProxyAuthenticationStrategy;
 import org.apache.http.util.EntityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -82,17 +86,30 @@ public class ProxyService {
         
         CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
         
+        // Parse username and domain
         String[] usernameParts = proxyConfig.getUsername().split("\\\\");
         String domain = usernameParts.length > 1 ? usernameParts[0] : proxyConfig.getDomain();
         String username = usernameParts.length > 1 ? usernameParts[1] : proxyConfig.getUsername();
         
+        logger.info("Proxy authentication - Domain: [{}], Username: [{}]", domain, username);
+        
+        // Get workstation name
+        String workstation = null;
+        try {
+            workstation = java.net.InetAddress.getLocalHost().getHostName();
+        } catch (Exception e) {
+            logger.debug("Could not determine workstation name: {}", e.getMessage());
+        }
+        
+        // Set up NTLM credentials
         NTCredentials ntCredentials = new NTCredentials(
                 username,
                 proxyConfig.getPassword(),
-                null, // workstation can be null
+                workstation,
                 domain
         );
         
+        // Add NTLM credentials only
         credentialsProvider.setCredentials(
                 new AuthScope(proxyConfig.getHost(), proxyConfig.getPort()),
                 ntCredentials
@@ -103,11 +120,18 @@ public class ProxyService {
                 .setConnectTimeout(httpClientConfig.getConnection().getTimeout())
                 .setSocketTimeout(httpClientConfig.getSocketTimeout())
                 .setConnectionRequestTimeout(httpClientConfig.getConnection().getRequestTimeout())
+                .setProxyPreferredAuthSchemes(java.util.Arrays.asList("NTLM"))
+                .setAuthenticationEnabled(true)
                 .build();
         
-        return HttpClientBuilder.create()
+        HttpClientBuilder builder = HttpClientBuilder.create()
                 .setDefaultCredentialsProvider(credentialsProvider)
                 .setDefaultRequestConfig(requestConfig)
-                .build();
+                .setProxyAuthenticationStrategy(ProxyAuthenticationStrategy.INSTANCE);
+        
+        // Disable connection pooling to avoid connection reuse issues
+        builder.disableConnectionState();
+        
+        return builder.build();
     }
 }
