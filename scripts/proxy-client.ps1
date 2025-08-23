@@ -114,14 +114,28 @@ if (-not $Username) {
 if (-not $Password) {
     Write-Host "Password not found in configuration file." -ForegroundColor Yellow
     Write-Host "Please enter password for user: $Username" -ForegroundColor Yellow
+    Write-Host "Note: For passwords with special characters, you may need to enter them as plain text" -ForegroundColor Cyan
     
-    # Prompt for password securely (hidden input)
-    $securePasswordInput = Read-Host "Password" -AsSecureString
+    # Ask user which input method to use
+    Write-Host ""
+    Write-Host "Choose password input method:" -ForegroundColor Yellow
+    Write-Host "1. Secure input (hidden, recommended for simple passwords)" -ForegroundColor White
+    Write-Host "2. Plain text input (visible, needed for complex passwords with special characters)" -ForegroundColor White
+    Write-Host ""
     
-    # Convert secure string to plain text for use in credential
-    $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePasswordInput)
-    $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
+    $choice = Read-Host "Enter choice (1 or 2)"
+    
+    if ($choice -eq "2") {
+        # Plain text input for special characters
+        Write-Host "WARNING: Password will be visible while typing!" -ForegroundColor Red
+        $Password = Read-Host "Password (visible)"
+    } else {
+        # Default to secure input
+        $securePasswordInput = Read-Host "Password (hidden)" -AsSecureString
+        $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePasswordInput)
+        $Password = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
+    }
     
     if (-not $Password) {
         Write-Host "Error: Password cannot be empty." -ForegroundColor Red

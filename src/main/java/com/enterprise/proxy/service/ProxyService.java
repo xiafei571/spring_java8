@@ -91,14 +91,27 @@ public class ProxyService {
             return "Error: Password is not configured. Please set proxy.password in application.properties";
         }
         
-        // Log password characteristics for debugging
+        // Log password characteristics for debugging (without exposing actual password)
         String password = proxyConfig.getPassword();
-        logger.info("Password contains special characters: {}", password.matches(".*[^a-zA-Z0-9].*"));
-        logger.info("Password character analysis: length={}, hasSymbols={}, hasPipe={}, hasAt={}", 
+        logger.info("Password analysis: length={}, hasSpecialChars={}, hasPipe={}, hasAt={}, hasBackslash={}, hasDot={}", 
                    password.length(), 
-                   password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{}|;':\",./<>?].*"),
+                   password.matches(".*[^a-zA-Z0-9].*"),
                    password.contains("|"),
-                   password.contains("@"));
+                   password.contains("@"),
+                   password.contains("\\"),
+                   password.contains("."));
+        
+        // Check for potential encoding issues
+        try {
+            byte[] passwordBytes = password.getBytes("UTF-8");
+            logger.info("Password UTF-8 byte length: {}", passwordBytes.length);
+            // Check if byte length differs from character length (indicates multi-byte characters)
+            if (passwordBytes.length != password.length()) {
+                logger.warn("Password contains multi-byte characters - potential encoding issue");
+            }
+        } catch (Exception e) {
+            logger.warn("Could not analyze password encoding: {}", e.getMessage());
+        }
         
         // Try Kerberos first (like PowerShell), then NTLM, then Basic
         String result = executeRequestWithKerberos(targetUrl);
