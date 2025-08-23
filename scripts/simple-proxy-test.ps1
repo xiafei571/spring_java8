@@ -9,10 +9,15 @@ param(
 )
 
 # Simple password prompt - exactly like manual entry
-# $password = Read-Host "Enter password" -AsSecureString
+if (-not $password) {
+    $securePassword = Read-Host "Enter password" -AsSecureString
+} else {
+    # Convert plain text password to SecureString (like your manual command)
+    $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+}
 
 # Create credential exactly like manual command
-$cred = New-Object System.Management.Automation.PSCredential($Username, $password)
+$cred = New-Object System.Management.Automation.PSCredential($Username, $securePassword)
 
 # Execute exactly like your manual command - no extra parameters or formatting
 Write-Host "Executing: Invoke-WebRequest -Uri '$TargetUrl' -Proxy '$ProxyUrl' -ProxyCredential `$cred"
