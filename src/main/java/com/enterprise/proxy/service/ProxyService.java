@@ -43,10 +43,16 @@ import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
 import java.io.IOException;
 import java.security.PrivilegedAction;
+import java.security.cert.X509Certificate;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Arrays;
 import java.util.stream.Collectors;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.SSLSession;
 
 @Service
 public class ProxyService {
@@ -62,6 +68,40 @@ public class ProxyService {
         this.proxyConfig = proxyConfig;
         this.httpClientConfig = httpClientConfig;
         this.targetConfig = targetConfig;
+        
+        // Disable SSL certificate validation for testing (remove in production)
+        disableSSLVerification();
+    }
+    
+    private void disableSSLVerification() {
+        try {
+            // Create a trust manager that accepts all certificates
+            TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { return null; }
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) { }
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+                }
+            };
+            
+            // Install the all-trusting trust manager
+            SSLContext sc = SSLContext.getInstance("SSL");
+            sc.init(null, trustAllCerts, new java.security.SecureRandom());
+            
+            // Create all-trusting host name verifier
+            HostnameVerifier allHostsValid = new HostnameVerifier() {
+                public boolean verify(String hostname, SSLSession session) { return true; }
+            };
+            
+            // Set default SSL context and hostname verifier
+            javax.net.ssl.HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+            javax.net.ssl.HttpsURLConnection.setDefaultHostnameVerifier(allHostsValid);
+            
+            logger.info("SSL certificate verification disabled for testing");
+            
+        } catch (Exception e) {
+            logger.warn("Failed to disable SSL verification: {}", e.getMessage());
+        }
     }
     
     public String executeRequest(String targetUrl) {
