@@ -101,6 +101,14 @@ public class ProxyService {
                    password.contains("\\"),
                    password.contains("."));
         
+        // Check if password needs Properties file unescaping
+        String testPassword = password.replace("\\\\", "\\")
+                                     .replace("\\:", ":")
+                                     .replace("\\=", "=");
+        if (!password.equals(testPassword)) {
+            logger.info("Password contains Properties file escaping sequences");
+        }
+        
         // Check for potential encoding issues
         try {
             byte[] passwordBytes = password.getBytes("UTF-8");
