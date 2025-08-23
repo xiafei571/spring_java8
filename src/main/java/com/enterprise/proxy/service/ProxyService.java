@@ -17,6 +17,9 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.auth.BasicSchemeFactory;
 import org.apache.http.impl.auth.NTLMSchemeFactory;
 import org.apache.http.impl.auth.SPNegoSchemeFactory;
+import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
+import org.apache.http.conn.ssl.NoopHostnameVerifier;
+import org.apache.http.ssl.SSLContextBuilder;
 import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
@@ -75,7 +78,7 @@ public class ProxyService {
     
     private void disableSSLVerification() {
         try {
-            // Create a trust manager that accepts all certificates
+            // Create a trust manager that accepts all certificates (for corporate environments)
             TrustManager[] trustAllCerts = new TrustManager[]{
                 new X509TrustManager() {
                     public X509Certificate[] getAcceptedIssuers() { return null; }
@@ -85,7 +88,7 @@ public class ProxyService {
             };
             
             // Install the all-trusting trust manager
-            SSLContext sc = SSLContext.getInstance("SSL");
+            SSLContext sc = SSLContext.getInstance("TLS");
             sc.init(null, trustAllCerts, new java.security.SecureRandom());
             
             // Create all-trusting host name verifier
@@ -97,10 +100,10 @@ public class ProxyService {
             javax.net.ssl.HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
             javax.net.ssl.HttpsURLConnection.setDefaultHostnameVerifier(allHostsValid);
             
-            logger.info("SSL certificate verification disabled for testing");
+            logger.info("SSL certificate verification disabled for corporate proxy environment");
             
         } catch (Exception e) {
-            logger.warn("Failed to disable SSL verification: {}", e.getMessage());
+            logger.warn("Failed to configure SSL settings: {}", e.getMessage());
         }
     }
     
@@ -502,12 +505,29 @@ public class ProxyService {
                 .setAuthenticationEnabled(true)
                 .build();
 
+        // Create SSL context that trusts all certificates
+        SSLConnectionSocketFactory sslSocketFactory = null;
+        try {
+            SSLContext sslContext = SSLContextBuilder.create()
+                .loadTrustMaterial(null, (certificate, authType) -> true)
+                .build();
+            sslSocketFactory = new SSLConnectionSocketFactory(
+                sslContext, NoopHostnameVerifier.INSTANCE);
+        } catch (Exception e) {
+            logger.warn("Failed to create SSL context for Basic auth: {}", e.getMessage());
+        }
+
         // Create HttpClient with Basic support and authentication strategy
-        return HttpClientBuilder.create()
+        HttpClientBuilder builder = HttpClientBuilder.create()
                 .setDefaultCredentialsProvider(credentialsProvider)
                 .setDefaultRequestConfig(config)
-                .setProxyAuthenticationStrategy(new ProxyAuthenticationStrategy())
-                .build();
+                .setProxyAuthenticationStrategy(new ProxyAuthenticationStrategy());
+        
+        if (sslSocketFactory != null) {
+            builder.setSSLSocketFactory(sslSocketFactory);
+        }
+        
+        return builder.build();
     }
 
     private CloseableHttpClient createHttpClientWithNtlmProxyUsing(String domain, String workstation) {
@@ -567,6 +587,21 @@ public class ProxyService {
         }
         Registry<AuthSchemeProvider> authRegistry = regBuilder.build();
         
+        // Create SSL context that trusts all certificates
+        SSLContext sslContext;
+        SSLConnectionSocketFactory sslSocketFactory;
+        try {
+            sslContext = SSLContextBuilder.create()
+                .loadTrustMaterial(null, (certificate, authType) -> true)
+                .build();
+            sslSocketFactory = new SSLConnectionSocketFactory(
+                sslContext, NoopHostnameVerifier.INSTANCE);
+        } catch (Exception e) {
+            logger.warn("Failed to create SSL context, using default: {}", e.getMessage());
+            sslContext = null;
+            sslSocketFactory = null;
+        }
+
         HttpClientBuilder builder;
         if (WinHttpClients.isWinAuthAvailable()) {
             logger.info("Using Windows native SSPI for NTLM (WinHttpClients)");
@@ -574,6 +609,12 @@ public class ProxyService {
         } else {
             logger.info("Windows SSPI not available, using standard HttpClient");
             builder = HttpClientBuilder.create();
+        }
+        
+        // Add SSL configuration if available
+        if (sslSocketFactory != null) {
+            builder.setSSLSocketFactory(sslSocketFactory);
+            logger.info("SSL certificate verification disabled for HTTPS requests");
         }
         
         return builder
