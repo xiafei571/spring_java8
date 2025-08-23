@@ -52,6 +52,11 @@ function Invoke-ProxyRequest {
         $credential = New-Object System.Management.Automation.PSCredential($User, $securePassword)
         
         Write-Host "Executing request with proxy authentication..." -ForegroundColor Yellow
+        Write-Host "DEBUG: Actual command will be:" -ForegroundColor Cyan
+        Write-Host "Invoke-WebRequest -Uri '$Url' -Proxy '$Proxy' -ProxyCredential `$credential" -ForegroundColor Cyan
+        Write-Host "DEBUG: Username in credential: $($credential.UserName)" -ForegroundColor Cyan
+        Write-Host "DEBUG: Password length in credential: $($credential.Password.Length)" -ForegroundColor Cyan
+        Write-Host ""
         
         # Execute the request (without -UseBasicParsing to match your working command)
         $response = Invoke-WebRequest -Uri $Url -Proxy $Proxy -ProxyCredential $credential
